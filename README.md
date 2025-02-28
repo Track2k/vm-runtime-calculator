@@ -1,3 +1,8 @@
+## Design
+![image](vm-script-scheduler.drawio.png)
+
+
+
 # AWS Lambda Function for EC2 Runtime Report
 
 This AWS Lambda function calculates the cumulative runtime of EC2 instances over a specified period, generates a report, saves it to an S3 bucket, and sends an email notification via SES.
@@ -10,20 +15,13 @@ This AWS Lambda function calculates the cumulative runtime of EC2 instances over
 
 ## Setup Instructions
 
-1. **Clone the repository:**
-
-    ```sh
-    git clone <repository-url>
-    cd <repository-directory>
-    ```
-
-2. **Install dependencies:**
+1. **Install dependencies:**
 
     ```sh
     pip install -r requirements.txt
     ```
 
-3. **Set environment variables:**
+2. **Set environment variables:**
 
     Ensure the following environment variables are set in your Lambda function configuration:
 
