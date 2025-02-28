@@ -121,4 +121,4 @@ To invoke the Lambda function automatically, set up a CloudWatch Events rule (us
 
 ## Usage
 
-The Lambda function will automatically execute based on the configured trigger (e.g., CloudWatch Events). It will calculate the runtime of EC2 instances, generate a report, save it to S3, and send an email notification.
+The Lambda function will automatically execute based on the configured trigger. It will calculate the runtime of EC2 instances, generate a report, save it to S3, and send an email notification.
