@@ -87,7 +87,7 @@ To allow the Lambda function to execute properly, you need to attach the followi
 
 ## Event Scheduler
 
-To invoke the Lambda function automatically, set up a CloudWatch Events rule:
+To invoke the Lambda function automatically, set up a CloudWatch Events rule (use console or CLI).:
 
 1. **Create a CloudWatch Events rule:**
 
@@ -102,7 +102,7 @@ To invoke the Lambda function automatically, set up a CloudWatch Events rule:
     ```
 
 ## Deployment
-
+ To deploy the Lambda function, use console or CLI:
 1. **Zip the Lambda function:**
 
     ```sh
