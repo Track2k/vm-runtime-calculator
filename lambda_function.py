@@ -9,6 +9,12 @@ from datetime import timezone, timedelta
 import logging
 import os
 
+required_env_vars = ['S3_BUCKET', 'S3_KEY', 'REGION', 'SENDER_EMAIL', 'RECIPIENT_EMAIL']
+
+for var in required_env_vars:
+    if not os.environ.get(var):
+        raise ValueError(f"Missing required environment variable: {var}")
+
 # Setup logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -25,14 +31,28 @@ SENDER_EMAIL = os.environ.get('SENDER_EMAIL')  # Replace with a verified email i
 RECIPIENT_EMAIL = os.environ.get('RECIPIENT_EMAIL')  # Replace with recipient email
 
 # Initialize SES client
-ses_client = boto3.client("ses", region_name=REGION)
+ses_client = boto3.client("ses", region_name=REGION, config=boto3.session.Config(
+    signature_version='v4',
+    retries={'max_attempts': 10, 'mode': 'standard'}
+))
 
 def send_email(report_link):
     """
     Send an email via AWS SES with the report link.
+
+    Args:
+        report_link (str): The S3 URL of the generated report.
+
+    Returns:
+        None
     """
     subject = "AWS EC2 Runtime Report"
     body_text = f"The EC2 instance runtime report has been generated.\n\nDownload it here: {report_link}"
+
+    # Check if email addresses are set
+    if not SENDER_EMAIL or not RECIPIENT_EMAIL:
+        logger.error("Missing email configuration. Please set SENDER_EMAIL and RECIPIENT_EMAIL environment variables.")
+        return
     
     try:
         response = ses_client.send_email(
@@ -50,59 +70,74 @@ def send_email(report_link):
 
 def get_all_instances():
     """
-    Get all EC2 instances regardless of state
+    Retrieve all EC2 instances using pagination.
+
+    Returns:
+        list: A list of dictionaries containing instance details, including:
+            - InstanceId (str): The EC2 instance ID.
+            - Name (str): The instance name.
+            - Type (str): The instance type.
+            - State (str): The current state of the instance.
+            - CurrentSession (float): Running time in hours if the instance is active, otherwise 0.
     """
-    print("Getting all EC2 instances...")
+    logger.info("Getting all EC2 instances...")
     
     try:
         # Connect to EC2
         ec2 = boto3.client('ec2', region_name=REGION)
         
         # Get all instances
-        response = ec2.describe_instances()
+        paginator = ec2.get_paginator('describe_instances')
         
         # Create a list to store instance info
         all_instances = []
         
         # Loop through the response and extract instance details
-        for reservation in response['Reservations']:
-            for instance in reservation['Instances']:
+        for page in paginator.paginate():
+            for reservation in page['Reservations']:
+                for instance in reservation['Instances']:
                 # Get instance name from tags
-                instance_name = "Unnamed"
-                if 'Tags' in instance:
-                    for tag in instance['Tags']:
-                        if tag['Key'] == 'Name':
-                            instance_name = tag['Value']
+                    instance_name = "Unnamed"
+                    if 'Tags' in instance:
+                        for tag in instance['Tags']:
+                            if tag['Key'] == 'Name':
+                                instance_name = tag['Value']
                 
-                # Create dictionary with instance info
-                instance_info = {
-                    'InstanceId': instance['InstanceId'],
-                    'Name': instance_name,
-                    'Type': instance['InstanceType'],
-                    'State': instance['State']['Name'],
-                    'CurrentSession': 0
-                }
+                    # Create dictionary with instance info
+                    instance_info = {
+                        'InstanceId': instance['InstanceId'],
+                        'Name': instance_name,
+                        'Type': instance['InstanceType'],
+                        'State': instance['State']['Name'],
+                        'CurrentSession': 0
+                    }
                 
-                # If instance is running, calculate current session time
-                if instance['State']['Name'] == 'running':
-                    launch_time = instance['LaunchTime']
-                    current_time = datetime.datetime.now(timezone.utc)
-                    running_time = current_time - launch_time
-                    instance_info['CurrentSession'] = running_time.total_seconds() / 3600  # Convert to hours
+                    # If instance is running, calculate current session time
+                    if instance['State']['Name'] == 'running':
+                        launch_time = instance['LaunchTime']
+                        current_time = datetime.datetime.now(timezone.utc)
+                        running_time = current_time - launch_time
+                        instance_info['CurrentSession'] = running_time.total_seconds() / 3600  # Convert to hours
                 
-                # Add to our list
-                all_instances.append(instance_info)
+                    # Add to our list
+                    all_instances.append(instance_info)
         
-        print(f"Found {len(all_instances)} instances.")
-        return all_instances
+            logger.info(f"Found {len(all_instances)} instances.")
+            return all_instances
     
     except Exception as e:
-        print(f"Error getting instances: {str(e)}")
-        return []
+            logger.error(f"Error getting instances: {str(e)}")
+            return []
 
 def get_cumulative_runtime(instance_id):
     """
-    Calculate cumulative runtime for an instance using CloudWatch metrics
+    Calculate cumulative runtime for an instance over a defined period.
+
+    Args:
+        instance_id (str): The ID of the EC2 instance.
+
+    Returns:
+        float: Cumulative runtime in hours over the past LOOKBACK_DAYS.
     """
     try:
         # Connect to CloudWatch
@@ -127,24 +162,30 @@ def get_cumulative_runtime(instance_id):
             ],
             StartTime=start_time,
             EndTime=end_time,
-            Period=3600,  # 1-hour intervals
+            Period=1800,  # 30 minutes intervals
             Statistics=['Average']
         )
+
+        period_seconds = 1800  # Ensure this matches the "Period" value in the request
         
         # Count data points (each represents an hour the instance was running)
-        runtime_hours = len(response['Datapoints'])
+        data_points_count = len(response['Datapoints'])
+        runtime_hours = (data_points_count * period_seconds) / 3600  
         
         return runtime_hours
     
     except Exception as e:
-        print(f"Error calculating runtime for {instance_id}: {str(e)}")
+        logger.info(f"Error calculating runtime for {instance_id}: {str(e)}")
         return 0
 
 def calculate_all_runtimes():
     """
     Calculate cumulative runtime for all instances
+
+    Returns:
+        list: A list of dictionaries with instance details and their cumulative runtime.
     """
-    print(f"Calculating cumulative runtime over the past {LOOKBACK_DAYS} days...")
+    logger.info(f"Calculating cumulative runtime over the past {LOOKBACK_DAYS} days...")
     
     # Get all instances
     instances = get_all_instances()
@@ -157,7 +198,7 @@ def calculate_all_runtimes():
     for instance in instances:
         # Track progress
         processed += 1
-        print(f"Processing instance {processed}/{total}: {instance['InstanceId']} ({instance['Name']})")
+        logger.info(f"Processing instance {processed}/{total}: {instance['InstanceId']} ({instance['Name']})")
         
         # Calculate cumulative runtime
         cumulative_hours = get_cumulative_runtime(instance['InstanceId'])
@@ -170,7 +211,13 @@ def calculate_all_runtimes():
 
 def generate_report(instances):
     """
-    Generate a CSV report, save it to S3, and send an SES email.
+    Generate a CSV report of EC2 instance runtimes, upload it to S3, and send an email.
+
+    Args:
+        instances (list): A list of instance details, including cumulative runtime.
+
+    Returns:
+        dict: A status message with the S3 report path or an error message.
     """
     long_running = [i for i in instances if i['CumulativeHours'] > HOUR_THRESHOLD]
     long_running.sort(key=lambda x: x['CumulativeHours'], reverse=True)
@@ -212,6 +259,13 @@ def generate_report(instances):
 def lambda_handler(event, context):
     """
     AWS Lambda entry point.
+
+    Args:
+        event (dict): The event data.
+        context: lambda runtime info
+    
+    Returns:
+        dict: A status message with the S3 report path or an error message.
     """
     logger.info("Lambda function started.")
     instances = calculate_all_runtimes()
