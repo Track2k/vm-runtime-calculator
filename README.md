@@ -7,6 +7,10 @@
 
 This AWS Lambda function calculates the cumulative runtime of EC2 instances over a specified period, generates a report, saves it to an S3 bucket, and sends an email notification via SES.
 
+## Important
+
+- **Tweak the `HOUR_THRESHOLD` and `LOOKBACK_DAYS` variables in the Lambda function code to suit your requirements.** These variables control the minimum runtime for reporting and the period over which the runtime is calculated, respectively.
+
 ## Prerequisites
 
 - AWS account with necessary permissions
