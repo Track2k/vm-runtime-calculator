@@ -25,6 +25,7 @@ S3_KEY = os.environ.get('S3_KEY')  # S3 key path for the report
 REGION = os.environ.get('REGION') 
 HOUR_THRESHOLD = 0   # Report instances running longer than this many hours
 LOOKBACK_DAYS = 7     # How many days to check history
+INSTANCE_REGION = ""
 
 # SES Configuration
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL')  # Replace with a verified email in SES
@@ -79,57 +80,71 @@ def get_all_instances():
             - Type (str): The instance type.
             - State (str): The current state of the instance.
             - CurrentSession (float): Running time in hours if the instance is active, otherwise 0.
+            - Region (str): The AWS region of the instance.
     """
     logger.info("Getting all EC2 instances...")
     
     try:
-        # Connect to EC2
-        ec2 = boto3.client('ec2', region_name=REGION)
-        
-        # Get all instances
-        paginator = ec2.get_paginator('describe_instances')
-        
-        # Create a list to store instance info
         all_instances = []
+
+        # If region is specified, only check that region
+        if INSTANCE_REGION:
+            regions = [INSTANCE_REGION]
+        else:
+            # Get all regions
+            ec2_global = boto3.client('ec2')
+            regions = [region['RegionName'] for region in ec2_global.describe_regions()['Regions']]
+            logger.info(f"Checking instances across {len(regions)} regions")
+
+                # Loop through each region
+        for region in regions:
+            logger.info(f"Getting instances from region: {region}")    
+            # Connect to EC2
+            ec2 = boto3.client('ec2', region_name=region)
         
-        # Loop through the response and extract instance details
-        for page in paginator.paginate():
-            for reservation in page['Reservations']:
-                for instance in reservation['Instances']:
-                # Get instance name from tags
-                    instance_name = "Unnamed"
-                    if 'Tags' in instance:
-                        for tag in instance['Tags']:
-                            if tag['Key'] == 'Name':
-                                instance_name = tag['Value']
-                
-                    # Create dictionary with instance info
-                    instance_info = {
-                        'InstanceId': instance['InstanceId'],
-                        'Name': instance_name,
-                        'Type': instance['InstanceType'],
-                        'State': instance['State']['Name'],
-                        'CurrentSession': 0
-                    }
-                
-                    # If instance is running, calculate current session time
-                    if instance['State']['Name'] == 'running':
-                        launch_time = instance['LaunchTime']
-                        current_time = datetime.datetime.now(timezone.utc)
-                        running_time = current_time - launch_time
-                        instance_info['CurrentSession'] = running_time.total_seconds() / 3600  # Convert to hours
-                
-                    # Add to our list
-                    all_instances.append(instance_info)
+            # Get all instances
+            paginator = ec2.get_paginator('describe_instances')
         
-            logger.info(f"Found {len(all_instances)} instances.")
-            return all_instances
+        
+            # Loop through the response and extract instance details
+            for page in paginator.paginate():
+                for reservation in page['Reservations']:
+                    for instance in reservation['Instances']:
+                    # Get instance name from tags
+                        instance_name = "Unnamed"
+                        if 'Tags' in instance:
+                            for tag in instance['Tags']:
+                                if tag['Key'] == 'Name':
+                                    instance_name = tag['Value']
+                    
+                        # Create dictionary with instance info
+                        instance_info = {
+                            'InstanceId': instance['InstanceId'],
+                            'Name': instance_name,
+                            'Type': instance['InstanceType'],
+                            'State': instance['State']['Name'],
+                            'CurrentSession': 0,
+                            'Region': region
+                        }
+                    
+                        # If instance is running, calculate current session time
+                        if instance['State']['Name'] == 'running':
+                            launch_time = instance['LaunchTime']
+                            current_time = datetime.datetime.now(timezone.utc)
+                            running_time = current_time - launch_time
+                            instance_info['CurrentSession'] = running_time.total_seconds() / 3600  # Convert to hours
+                    
+                        # Add to our list
+                        all_instances.append(instance_info)
+        
+        logger.info(f"Found {len(all_instances)} instances across all regions..")
+        return all_instances
     
     except Exception as e:
             logger.error(f"Error getting instances: {str(e)}")
             return []
 
-def get_cumulative_runtime(instance_id):
+def get_cumulative_runtime(instance_id, region):
     """
     Calculate cumulative runtime for an instance over a defined period.
 
@@ -141,7 +156,7 @@ def get_cumulative_runtime(instance_id):
     """
     try:
         # Connect to CloudWatch
-        cloudwatch = boto3.client('cloudwatch', region_name=REGION)
+        cloudwatch = boto3.client('cloudwatch', region_name=region)
         
         # Calculate time period
         end_time = datetime.datetime.now(timezone.utc)
@@ -175,7 +190,7 @@ def get_cumulative_runtime(instance_id):
         return runtime_hours
     
     except Exception as e:
-        logger.info(f"Error calculating runtime for {instance_id}: {str(e)}")
+        logger.info(f"Error calculating runtime for {instance_id} in {region}: {str(e)}")
         return 0
 
 def calculate_all_runtimes():
@@ -198,10 +213,10 @@ def calculate_all_runtimes():
     for instance in instances:
         # Track progress
         processed += 1
-        logger.info(f"Processing instance {processed}/{total}: {instance['InstanceId']} ({instance['Name']})")
+        logger.info(f"Processing instance {processed}/{total}: {instance['InstanceId']} ({instance['Name']}) in {instance['Region']}")
         
         # Calculate cumulative runtime
-        cumulative_hours = get_cumulative_runtime(instance['InstanceId'])
+        cumulative_hours = get_cumulative_runtime(instance['InstanceId'], instance['Region'])
         instance['CumulativeHours'] = cumulative_hours
         
         # Sleep briefly to avoid hitting API rate limits
@@ -224,7 +239,7 @@ def generate_report(instances):
 
     try:
         csv_buffer = io.StringIO()
-        fieldnames = ['InstanceId', 'Name', 'Type', 'State', 'CurrentSession', 'CumulativeHours']
+        fieldnames = ['InstanceId', 'Name', 'Type', 'State', 'Region', 'CurrentSession', 'CumulativeHours']
         writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames)
         writer.writeheader()
 
@@ -234,6 +249,7 @@ def generate_report(instances):
                 'Name': instance['Name'],
                 'Type': instance['Type'],
                 'State': instance['State'],
+                'Region': instance['Region'],
                 'CurrentSession': round(instance['CurrentSession'], 2),
                 'CumulativeHours': instance['CumulativeHours']
             })

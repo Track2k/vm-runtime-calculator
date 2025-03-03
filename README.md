@@ -35,6 +35,15 @@ This AWS Lambda function calculates the cumulative runtime of EC2 instances over
     - `SENDER_EMAIL`: Verified email in SES
     - `RECIPIENT_EMAIL`: Recipient email
 
+3. **Check instances for a specific region:**
+
+    To check instances for a specific region, set the `INSTANCE_REGION` variable in the Lambda function code to the desired region name. If you want to check instances across all regions, leave it blank (`""`).
+
+4. **Verify SES identity and create configuration set:**
+
+    Ensure that the email addresses used for `SENDER_EMAIL` and `RECIPIENT_EMAIL` are verified in SES. Additionally, create a configuration set in SES.
+
+
 ## Permissions
 
 To allow the Lambda function to execute properly, you need to attach the following policies to the Lambda execution role:
@@ -83,7 +92,8 @@ To allow the Lambda function to execute properly, you need to attach the followi
     {
         "Effect": "Allow",
         "Action": [
-            "ec2:DescribeInstances"
+            "ec2:DescribeInstances",
+            "ec2:DescribeRegions"
         ],
         "Resource": "*"
     }
